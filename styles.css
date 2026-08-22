@@ -1,0 +1,30 @@
+#prime-imdb-rating {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+
+    width: fit-content;
+
+    padding: 7px 12px;
+    margin-top: 12px;
+
+    border-radius: 6px;
+
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+
+    color: white;
+
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+
+    z-index: 9999;
+}
+
+#prime-imdb-rating .prime-imdb-star {
+    color: #f5c518;
+    font-size: 17px;
+}

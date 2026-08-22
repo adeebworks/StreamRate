@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Prime Video IMDb Rating Assistant",
+  "version": "2.0.0",
+  "description": "Automatically displays IMDb ratings on Prime Video without requiring any clicks.",
+  "permissions": [],
+  "host_permissions": [
+    "https://www.omdbapi.com/*",
+    "https://api.agregarr.org/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.primevideo.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "styles.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
