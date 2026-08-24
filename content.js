@@ -5,10 +5,17 @@
     // CONFIG
     // =========================================================
 
+    const TMDB_API_KEY = '7e3d8f1622743180fdcd999dd6cbfd7d';
+    const TMDB_API_URL = 'https://api.themoviedb.org/3';
+
     const OMDB_API_KEY = '213270c7';
-    const AGREGARR_URL = 'https://api.agregarr.org/api/ratings?id=';
+
+    const AGREGARR_URL =
+        'https://api.agregarr.org/api/ratings?id=';
+
     const BADGE_ID = 'prime-imdb-rating';
-    const NETFLIX_BADGE_ID = 'streamrate-netflix-rating';
+    const NETFLIX_BADGE_ID =
+        'streamrate-netflix-rating';
 
     let currentKey = null;
     let requestId = 0;
@@ -30,8 +37,13 @@
     // =========================================================
 
     function removeRating() {
-        const primeBadge = document.getElementById(BADGE_ID);
-        const netflixBadge = document.getElementById(NETFLIX_BADGE_ID);
+        const primeBadge =
+            document.getElementById(BADGE_ID);
+
+        const netflixBadge =
+            document.getElementById(
+                NETFLIX_BADGE_ID
+            );
 
         if (primeBadge) {
             primeBadge.remove();
@@ -43,927 +55,980 @@
     }
 
     // =========================================================
-    // PRIME TITLE PAGE
+    // PAGE DETECTION
     // =========================================================
 
     function isPrimeTitlePage() {
-        return window.location.pathname.includes('/detail/');
+        return location.hostname.includes(
+            'primevideo.com'
+        );
     }
-
-    // =========================================================
-    // NETFLIX TITLE PAGE / MODAL
-    // =========================================================
 
     function isNetflixTitlePage() {
-        return (
-            location.hostname.includes('netflix.com') &&
-            location.pathname === '/browse' &&
-            new URLSearchParams(location.search).has('jbv')
+        return location.hostname.includes(
+            'netflix.com'
         );
     }
 
-    function cleanNetflixTitle(text) {
-        if (!text) {
-            return null;
+    // =========================================================
+    // NORMALIZE TITLE
+    // =========================================================
+
+    function normalizeTitle(title) {
+        if (!title) {
+            return '';
         }
 
-        let title = text.trim();
-
-        // Netflix usually exposes the current modal title
-        // through the browser document title.
-        title = title.replace(/\s*[-–—]\s*Netflix\s*$/i, '');
-
-        // Defensive cleanup for occasional title variants.
-        title = title.replace(/^Netflix\s*:\s*/i, '');
-
-        return title.trim();
+        return title
+            .replace(/\s+/g, ' ')
+            .replace(/\(.*?\)/g, '')
+            .replace(/\b(HD|4K|UHD)\b/gi, '')
+            .trim();
     }
 
-    function findNetflixTitle() {
-        // 1. Best source: browser tab title.
-        const documentTitle = document.title?.trim();
+    // =========================================================
+    // FIND NETFLIX ACTIVE MODAL
+    // =========================================================
 
-        if (documentTitle) {
-            const title = cleanNetflixTitle(documentTitle);
+    // =========================================================
+// FIND NETFLIX ACTIVE MODAL
+// =========================================================
 
-            if (isValidTitle(title)) {
-                return title;
+function getNetflixActiveModal() {
+    const selectors = [
+        '.previewModal--wrapper',
+        '.previewModal--container',
+        '[role="dialog"]'
+    ];
+
+    const modals = [];
+
+    for (const selector of selectors) {
+        const elements = document.querySelectorAll(selector);
+
+        for (const element of elements) {
+            if (!element) {
+                continue;
             }
-        }
 
-        // 2. Open Netflix modal title-treatment image.
-        // The title is often rendered inside the image itself,
-        // so we only use accessible text/attributes when Netflix
-        // provides them. We do NOT attempt OCR.
-        const logo = document.querySelector(
-            'img.previewModal--player-titleTreatment-logo[alt]'
-        );
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
 
-        if (logo) {
-            const alt = logo.alt?.trim();
-
-            if (alt) {
-                const title = cleanNetflixTitle(alt);
-
-                if (isValidTitle(title)) {
-                    return title;
-                }
+            if (
+                style.display === 'none' ||
+                style.visibility === 'hidden' ||
+                style.opacity === '0' ||
+                rect.width <= 0 ||
+                rect.height <= 0
+            ) {
+                continue;
             }
+
+            modals.push(element);
         }
+    }
 
-        // 3. Generic title-treatment elements.
-        const selectors = [
-            '[data-uia*="title"]',
-            '[aria-label*="title" i]'
-        ];
-
-        for (const selector of selectors) {
-            const elements = document.querySelectorAll(selector);
-
-            for (const element of elements) {
-                const text =
-                    element.getAttribute('aria-label') ||
-                    element.textContent?.trim();
-
-                const title = cleanNetflixTitle(text);
-
-                if (isValidTitle(title)) {
-                    return title;
-                }
-            }
-        }
-
+    if (!modals.length) {
         return null;
     }
 
-    function getNetflixModal() {
+    // Prefer the largest visible modal
+    modals.sort((a, b) => {
+        const rectA = a.getBoundingClientRect();
+        const rectB = b.getBoundingClientRect();
+
         return (
-            document.querySelector('.previewModal--wrapper') ||
-            document.querySelector('[class*="previewModal--wrapper"]') ||
-            document.querySelector('[class*="previewModal"]')
+            rectB.width * rectB.height -
+            rectA.width * rectA.height
         );
-    }
+    });
+
+    return modals[0];
+}
 
     // =========================================================
-    // FIND PRIME TITLE
+    // VALIDATE NETFLIX TITLE
     // =========================================================
 
-    function findPrimeTitle() {
-
-        // =========================================================
-        // CLEAN PRIME TITLE
-        // =========================================================
-
-        function cleanPrimeTitle(text) {
-            if (!text) {
-                return null;
-            }
-
-            let title = text.trim();
-
-            // Remove "Prime Video:" prefix
-            title = title.replace(
-                /^Prime Video\s*:\s*/i,
-                ''
-            );
-
-            // Remove season/episode suffixes:
-            //
-            // Taxi Driver - Season 1
-            // Taxi Driver - Season 2
-            // Sterling Point - S1
-            // Sterling Point - S1 - E1
-            // Some Show S1
-            // Some Show - S01
-            //
-            title = title.replace(
-                /\s*[-–—]?\s*S(?:eason)?\s*\d+(?:\s*[-–—]?\s*E(?:pisode)?\s*\d+)?\s*$/i,
-                ''
-            );
-
-            // Also handle "Season 1" without S
-            title = title.replace(
-                /\s*[-–—]\s*Season\s+\d+(?:\s*[-–—]\s*Episode\s+\d+)?\s*$/i,
-                ''
-            );
-
-            // Handle "- Episode 1" if it appears alone
-            title = title.replace(
-                /\s*[-–—]\s*Episode\s+\d+\s*$/i,
-                ''
-            );
-
-            return title.trim();
-        }
-
-        // =========================================================
-        // 1. DOCUMENT TITLE
-        // =========================================================
-
-        const documentTitle = document.title?.trim();
-
-        if (documentTitle) {
-
-            const title = cleanPrimeTitle(documentTitle);
-
-            if (isValidTitle(title)) {
-                return title;
-            }
-        }
-
-        // =========================================================
-        // 2. OG / META TITLE
-        // =========================================================
-
-        const metaSelectors = [
-            'meta[property="og:title"]',
-            'meta[name="twitter:title"]'
-        ];
-
-        for (const selector of metaSelectors) {
-
-            const meta = document.querySelector(selector);
-            const content = meta?.content?.trim();
-
-            if (!content) {
-                continue;
-            }
-
-            const title = cleanPrimeTitle(content);
-
-            if (isValidTitle(title)) {
-                return title;
-            }
-        }
-
-        // =========================================================
-        // 3. PRIME TITLE ELEMENTS
-        // =========================================================
-
-        const selectors = [
-            '[data-testid*="title"]',
-            '[data-automation-id*="title"]'
-        ];
-
-        for (const selector of selectors) {
-
-            const elements =
-                document.querySelectorAll(selector);
-
-            for (const element of elements) {
-
-                const text = element.innerText?.trim();
-
-                if (!text) {
-                    continue;
-                }
-
-                const title = cleanPrimeTitle(text);
-
-                if (isValidTitle(title)) {
-                    return title;
-                }
-            }
-        }
-
-        // =========================================================
-        // 4. H1 FALLBACK
-        // =========================================================
-
-        const h1s = document.querySelectorAll('h1');
-
-        for (const h1 of h1s) {
-
-            const text = h1.innerText?.trim();
-
-            if (!text) {
-                continue;
-            }
-
-            const title = cleanPrimeTitle(text);
-
-            if (isValidTitle(title)) {
-                return title;
-            }
-        }
-
-        // =========================================================
-        // 5. IMAGE ALT FALLBACK
-        // =========================================================
-
-        const images =
-            document.querySelectorAll('img[alt]');
-
-        for (const image of images) {
-
-            const alt = image.alt?.trim();
-
-            if (!alt || alt.length > 120) {
-                continue;
-            }
-
-            const title = cleanPrimeTitle(alt);
-
-            if (isValidTitle(title)) {
-                return title;
-            }
-        }
-
-        return null;
-    }
-
-    // =========================================================
-    // VALID TITLE
-    // =========================================================
-
-    function isValidTitle(text) {
-
+    function isValidNetflixTitle(text) {
         if (!text) {
             return false;
         }
 
-        text = text.trim();
+        const value = normalizeTitle(text);
 
-        if (text.length < 2 || text.length > 120) {
+        if (
+            value.length < 2 ||
+            value.length > 120
+        ) {
             return false;
         }
 
-        const lower = text.toLowerCase();
-
-        // =========================================================
-        // NEVER ACCEPT PRIME UI LABELS AS MOVIE/SERIES TITLES
-        // =========================================================
-
-        const blockedExact = [
-
-            'prime video',
-
-            'watch with a prime membership',
-
-            'watch now',
-
-            'subscribe',
-
-            'sign in',
-
-            'home',
-
-            'movies',
-
-            'tv shows',
-
-            'episodes',
-
-            'related',
-
-            'details',
-
-            'explore',
-
-            'rent',
-
-            'buy now',
-
-            'cast',
-
-            'cast:',
-
-            'season',
-
-            'season 1',
-            'season 2',
-            'season 3',
-            'season 4',
-            'season 5',
-
-            'trailer',
-            'trailers',
-
-            'more like this',
-
-            'customer reviews',
-
-            'watch movies, tv shows, sports, and live tv',
-
-            'watch movies, tv shows, sports, and live tv.',
-
-            'prime video'
+        const invalidPatterns = [
+            /^play$/i,
+            /^episodes?$/i,
+            /^more episodes?$/i,
+            /^details$/i,
+            /^trailer$/i,
+            /^season \d+$/i,
+            /^\d+ seasons?$/i,
+            /^\d+ episodes?$/i,
+            /^\d{4}$/i,
+            /^u\/a/i,
+            /^violence/i,
+            /^cast:/i,
+            /^genres:/i,
+            /^this show is/i,
+            /^this movie is/i,
+            /^imdb/i,
+            /^netflix/i,
+            /^\d+\.\d+$/
         ];
 
-        if (blockedExact.includes(lower)) {
-            return false;
-        }
-
-        // =========================================================
-        // REJECT UI LABELS ENDING WITH :
-        // =========================================================
-
-        const blockedPrefixes = [
-
-            'cast:',
-            'details:',
-            'genre:',
-            'genres:',
-            'language:',
-            'languages:',
-            'audio:',
-            'subtitles:',
-            'director:',
-            'directors:',
-            'stars:',
-            'starring:',
-            'creators:',
-            'creator:'
-        ];
-
-        for (const prefix of blockedPrefixes) {
-
-            if (lower.startsWith(prefix)) {
+        for (const pattern of invalidPatterns) {
+            if (pattern.test(value)) {
                 return false;
             }
         }
 
-        // =========================================================
-        // REJECT PURE SEASON / EPISODE LABELS
-        // =========================================================
-
-        if (/^season\s+\d+$/i.test(text)) {
+        if (
+            /\bSeasons?\b/i.test(value) &&
+            value.length < 30
+        ) {
             return false;
-        }
-
-        if (/^episode\s+\d+$/i.test(text)) {
-            return false;
-        }
-
-        if (/^\d+\s+seasons?$/i.test(text)) {
-            return false;
-        }
-
-        if (/^\d+\s+episodes?$/i.test(text)) {
-            return false;
-        }
-
-        // =========================================================
-        // REJECT OBVIOUS NAVIGATION TEXT
-        // =========================================================
-
-        const blockedWords = [
-            'watch now',
-            'watch with',
-            'sign in',
-            'buy now',
-            'rent now',
-            'subscribe now'
-        ];
-
-        for (const word of blockedWords) {
-
-            if (lower.includes(word)) {
-                return false;
-            }
         }
 
         return true;
     }
 
     // =========================================================
-    // DETECT MOVIE / SERIES
+    // FIND NETFLIX TITLE
     // =========================================================
 
-    function detectType() {
-
-        /*
-         * Look for season information.
-         */
-
-        const text =
-            document.body.innerText || '';
-
-        if (
-            /\bSeason\s+\d+\b/i.test(text) ||
-            /\b\d+\s+seasons?\b/i.test(text)
-        ) {
-            return 'series';
-        }
-
-        /*
-         * Episodes are a secondary signal.
-         */
-
-        if (
-            /\b\d+\s+episodes?\b/i.test(text)
-        ) {
-            return 'series';
-        }
-
-        return 'movie';
-    }
-
-    // =========================================================
-    // FIND YEAR
-    // =========================================================
-
-    function findYear() {
-
-        const text =
-            document.body.innerText || '';
-
-        const matches =
-            text.match(/\b(?:19|20)\d{2}\b/g);
-
-        if (!matches) {
-            return null;
-        }
-
-        const currentYear =
-            new Date().getFullYear();
-
-        for (const year of matches) {
-
-            const number = Number(year);
-
-            if (
-                number >= 1900 &&
-                number <= currentYear + 2
-            ) {
-                return year;
-            }
-        }
-
-        return null;
-    }
-
-    // =========================================================
-    // NETFLIX TYPE / YEAR
-    // =========================================================
-
-    function detectNetflixType() {
-
-        const modal = getNetflixModal();
+    function getNetflixTitle() {
+        const modal =
+            getNetflixActiveModal();
 
         if (!modal) {
             return null;
         }
 
-        const text = modal.innerText || '';
+        // -----------------------------------------------------
+        // 1. Netflix title logo
+        // -----------------------------------------------------
 
-        if (
-            /\b\d+\s+seasons?\b/i.test(text) ||
-            /\bseason\s+\d+\b/i.test(text)
-        ) {
-            return 'series';
+        const logoSelectors = [
+            'img.previewModal--player-titleTreatment-logo',
+            'img[alt]'
+        ];
+
+        for (const selector of logoSelectors) {
+            const elements =
+                modal.querySelectorAll(selector);
+
+            for (const element of elements) {
+                const alt =
+                    element.getAttribute('alt');
+
+                if (
+                    alt &&
+                    alt.trim() &&
+                    alt.toLowerCase() !== 'logo' &&
+                    isValidNetflixTitle(alt)
+                ) {
+                    return normalizeTitle(alt);
+                }
+            }
         }
 
+        // -----------------------------------------------------
+        // 2. Explicit title elements
+        // -----------------------------------------------------
+
+        const titleSelectors = [
+            '[data-uia="previewModal-title"]',
+            '[data-uia="modal-title"]',
+            '[data-uia="title"]',
+            '.previewModal--boxart-title',
+            '.previewModal--player-titleTreatment',
+            '.title-card-title',
+            'h1'
+        ];
+
+        for (const selector of titleSelectors) {
+            const element =
+                modal.querySelector(selector);
+
+            if (!element) {
+                continue;
+            }
+
+            const text =
+                element.textContent?.trim();
+
+            if (
+                text &&
+                isValidNetflixTitle(text)
+            ) {
+                return normalizeTitle(text);
+            }
+        }
+
+        // -----------------------------------------------------
+        // 3. Search likely short text elements
+        // -----------------------------------------------------
+
+        const candidates =
+            modal.querySelectorAll(
+                'h1, h2, h3, span, div'
+            );
+
+        for (const element of candidates) {
+            // Avoid containers with lots of child content
+            if (element.children.length > 3) {
+                continue;
+            }
+
+            const text =
+                element.textContent?.trim();
+
+            if (
+                !isValidNetflixTitle(text)
+            ) {
+                continue;
+            }
+
+            // Don't use text that contains metadata
+            if (
+                /\bPlay\b/i.test(text) ||
+                /\bCast:/i.test(text) ||
+                /\bGenres:/i.test(text) ||
+                /\bIMDb\b/i.test(text) ||
+                /\bEpisodes\b/i.test(text)
+            ) {
+                continue;
+            }
+
+            const rect =
+                element.getBoundingClientRect();
+
+            if (
+                rect.width > 40 &&
+                rect.height > 10
+            ) {
+                return normalizeTitle(text);
+            }
+        }
+
+        return null;
+    }
+
+    // =========================================================
+    // PRIME TITLE
+    // =========================================================
+
+    function getPrimeTitle() {
+        const h1 =
+            document.querySelector('h1');
+
+        if (!h1) {
+            return null;
+        }
+
+        const title =
+            h1.textContent?.trim();
+
+        if (!title) {
+            return null;
+        }
+
+        return normalizeTitle(title);
+    }
+
+    // =========================================================
+    // DETERMINE NETFLIX TYPE
+    // =========================================================
+
+    // =========================================================
+// DETERMINE NETFLIX TYPE
+// =========================================================
+
+function getNetflixType(modal) {
+    if (!modal) {
         return 'movie';
     }
 
-    function findNetflixYear() {
+    const text = (modal.textContent || '')
+        .replace(/\s+/g, ' ')
+        .trim();
 
-        const modal = getNetflixModal();
+    // -----------------------------------------------------
+    // STRONG SERIES INDICATORS
+    // -----------------------------------------------------
+
+    if (/\b\d+\s+Seasons?\b/i.test(text)) {
+        return 'series';
+    }
+
+    if (/\bSeason\s+\d+\b/i.test(text)) {
+        return 'series';
+    }
+
+    if (/\b\d+\s+Episodes?\b/i.test(text)) {
+        return 'series';
+    }
+
+    if (/\bEpisodes?\b/i.test(text)) {
+        return 'series';
+    }
+
+    // -----------------------------------------------------
+    // Look specifically for Netflix metadata elements
+    // -----------------------------------------------------
+
+    const metadataElements = modal.querySelectorAll(
+        '[data-uia], .previewModal--metadata, .previewModal--info, span, div'
+    );
+
+    for (const element of metadataElements) {
+        const elementText = (element.textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        if (/^\d+\s+Seasons?$/i.test(elementText)) {
+            return 'series';
+        }
+
+        if (/^Season\s+\d+$/i.test(elementText)) {
+            return 'series';
+        }
+
+        if (/^\d+\s+Episodes?$/i.test(elementText)) {
+            return 'series';
+        }
+    }
+
+    // -----------------------------------------------------
+    // MOVIE DURATION INDICATORS
+    // Examples:
+    // 1h 42m
+    // 2h
+    // -----------------------------------------------------
+
+    if (/\b\d+\s*h\s*\d+\s*m\b/i.test(text)) {
+        return 'movie';
+    }
+
+    if (/\b\d+\s*h\b/i.test(text)) {
+        return 'movie';
+    }
+
+    // -----------------------------------------------------
+    // Default
+    // -----------------------------------------------------
+
+    return 'movie';
+}
+
+    // =========================================================
+    // DETECT TITLE
+    // =========================================================
+
+    // =========================================================
+// DETECT TITLE
+// =========================================================
+
+async function detectTitle() {
+    let title = null;
+    let type = 'movie';
+
+    // -----------------------------------------------------
+    // NETFLIX
+    // -----------------------------------------------------
+
+    if (isNetflixTitlePage()) {
+        const modal = getNetflixActiveModal();
 
         if (!modal) {
-            return null;
-        }
-
-        const text = modal.innerText || '';
-
-        const matches =
-            text.match(/\b(?:19|20)\d{2}\b/g);
-
-        if (!matches) {
-            return null;
-        }
-
-        const currentYear = new Date().getFullYear();
-
-        for (const year of matches) {
-
-            const number = Number(year);
-
-            if (
-                number >= 1900 &&
-                number <= currentYear + 2
-            ) {
-                return year;
-            }
-        }
-
-        return null;
-    }
-
-    // =========================================================
-    // EXTRACT NETFLIX METADATA
-    // =========================================================
-
-    function extractNetflixMetadata() {
-
-        if (!isNetflixTitlePage()) {
-            return null;
-        }
-
-        const title = findNetflixTitle();
-
-        if (!title) {
-            return null;
-        }
-
-        const type = detectNetflixType();
-
-        if (!type) {
-            return null;
-        }
-
-        return {
-            title,
-            type,
-            year:
-                type === 'movie'
-                    ? findNetflixYear()
-                    : null
-        };
-    }
-
-    // =========================================================
-    // EXTRACT METADATA
-    // =========================================================
-
-    function extractMetadata() {
-
-        if (isPrimeTitlePage()) {
-            return extractPrimeMetadata();
-        }
-
-        if (isNetflixTitlePage()) {
-            return extractNetflixMetadata();
-        }
-
-        return null;
-    }
-
-    function extractPrimeMetadata() {
-
-        if (!isPrimeTitlePage()) {
-            return null;
-        }
-
-        const title = findPrimeTitle();
-
-        if (!title) {
-            return null;
-        }
-
-        const type = detectType();
-
-        /*
-         * IMPORTANT:
-         *
-         * Movie:
-         *   title + year
-         *
-         * Series:
-         *   title only
-         */
-
-        const year =
-            type === 'movie'
-                ? findYear()
-                : null;
-
-        return {
-            title,
-            type,
-            year
-        };
-    }
-
-    // =========================================================
-    // UNIQUE KEY
-    // =========================================================
-
-    function getKey(metadata) {
-
-        return [
-            metadata.title.toLowerCase(),
-            metadata.type,
-            metadata.year || ''
-        ].join('|');
-    }
-
-    // =========================================================
-    // MAIN DETECTION
-    // =========================================================
-
-    function detectTitle() {
-
-        /*
-         * If Prime is not on a detail page,
-         * remove everything.
-         */
-
-        if (
-            !isPrimeTitlePage() &&
-            !isNetflixTitlePage()
-        ) {
-
-            if (currentKey !== null) {
-
-                currentKey = null;
-                requestId++;
-
-                removeRating();
-            }
-
             return;
         }
 
-        const metadata =
-            extractMetadata();
+        title = getNetflixTitle();
+        type = getNetflixType(modal);
+    }
 
-        /*
-         * Prime hasn't finished rendering yet.
-         *
-         * IMPORTANT:
-         * Do NOT set currentKey here.
-         *
-         * This allows the next mutation/retry to try again.
-         */
+    // -----------------------------------------------------
+    // PRIME VIDEO
+    // -----------------------------------------------------
 
-        if (!metadata) {
-            return;
-        }
+    else if (isPrimeTitlePage()) {
+        title = getPrimeTitle();
+        type = 'series';
+    }
 
-        const key = getKey(metadata);
+    if (!title) {
+        return;
+    }
 
-        /*
-         * Same title.
-         */
+    title = normalizeTitle(title);
 
-        if (key === currentKey) {
-            return;
-        }
+    if (!title) {
+        return;
+    }
 
-        /*
-         * NEW TITLE
-         */
+    const key = `${title.toLowerCase()}|${type}`;
 
-        currentKey = key;
+    // -----------------------------------------------------
+    // IMPORTANT:
+    // If the same title was initially detected as movie,
+    // but Netflix later reveals it is a series, allow update.
+    // -----------------------------------------------------
 
-        /*
-         * Kill any previous request.
-         */
+    if (key === currentKey) {
+        return;
+    }
 
-        requestId++;
+    // Detect same title but changed type
+    const previousTitle = currentKey
+        ? currentKey.split('|')[0]
+        : null;
 
-        const thisRequest = requestId;
+    const currentTitle = title.toLowerCase();
 
-        /*
-         * Immediately remove old rating.
-         */
-
-        removeRating();
-
+    if (
+        previousTitle === currentTitle &&
+        currentKey &&
+        currentKey.endsWith('|movie') &&
+        type === 'series'
+    ) {
         log(
-            '🎬 New StreamRate title:',
-            metadata
+            '🔄 Netflix type corrected: movie → series'
         );
 
-        getIMDbRating(
-            metadata,
-            thisRequest
-        );
+        currentKey = null;
+
+        // Remove possibly incorrect rating
+        removeRating();
     }
 
-    // =========================================================
+    currentKey = key;
+
+    requestId++;
+
+    const thisRequest = requestId;
+
+    log(
+        'New StreamRate title:',
+        {
+            title,
+            type
+        }
+    );
+
+    // -----------------------------------------------------
+    // CACHE
+    // -----------------------------------------------------
+
+    if (ratingCache.has(key)) {
+        const cached = ratingCache.get(key);
+
+        if (cached) {
+            log(
+                '📦 Using cached IMDb rating:',
+                cached
+            );
+
+            showRating(
+                cached,
+                thisRequest
+            );
+
+            return;
+        }
+    }
+
+    // -----------------------------------------------------
     // OMDb
+    // -----------------------------------------------------
+
+    const rating = await fetchOMDbRating(
+        title,
+        type,
+        thisRequest
+    );
+
+    if (thisRequest !== requestId) {
+        return;
+    }
+
+    if (!rating) {
+        log(
+            '❌ No IMDb rating found for:',
+            title
+        );
+
+        return;
+    }
+
+    // Cache using detected title + type
+    ratingCache.set(
+        key,
+        rating
+    );
+
+    showRating(
+        rating,
+        thisRequest
+    );
+}
+
+    // =========================================================
+    // OMDb MAIN FLOW
     // =========================================================
 
-    async function getIMDbRating(
-        metadata,
+    async function fetchOMDbRating(
+        title,
+        type,
         thisRequest
     ) {
-
-        const cacheKey =
-            getKey(metadata);
-
-        /*
-         * CACHE
-         */
-
-        if (ratingCache.has(cacheKey)) {
-
-            const cached =
-                ratingCache.get(cacheKey);
-
-            if (
-                thisRequest !== requestId
-            ) {
-                return;
-            }
-
-            if (cached.rating) {
-
-                showRating(
-                    cached.rating,
-                    thisRequest
-                );
-            }
-
-            return;
-        }
-
         log(
             '🔎 OMDb:',
-            metadata.title
+            title
         );
 
-        const params =
-            new URLSearchParams();
+        // -----------------------------------------------------
+        // First attempt
+        // -----------------------------------------------------
 
-        params.set(
-            'apikey',
-            OMDB_API_KEY
-        );
-
-        params.set(
-            't',
-            metadata.title
-        );
-
-        params.set(
-            'type',
-            metadata.type
-        );
-
-        /*
-         * ONLY MOVIES GET YEAR.
-         */
+        let result =
+            await queryOMDb(
+                title,
+                type,
+                thisRequest
+            );
 
         if (
-            metadata.type === 'movie' &&
-            metadata.year
+            thisRequest !== requestId
         ) {
-
-            params.set(
-                'y',
-                metadata.year
-            );
+            return null;
         }
 
-        const url =
-            `https://www.omdbapi.com/?${params.toString()}`;
+        // OMDb found and produced rating
+        if (
+            result.found &&
+            result.rating
+        ) {
+            return result.rating;
+        }
 
+        // OMDb found but no rating
+        // Do NOT go to TMDB.
+        if (result.found) {
+            return null;
+        }
+
+        // -----------------------------------------------------
+        // Try alternate OMDb type
+        // -----------------------------------------------------
+
+        const alternateType =
+            type === 'movie'
+                ? 'series'
+                : 'movie';
+
+        result =
+            await queryOMDb(
+                title,
+                alternateType,
+                thisRequest
+            );
+
+        if (
+            thisRequest !== requestId
+        ) {
+            return null;
+        }
+
+        // OMDb found and produced rating
+        if (
+            result.found &&
+            result.rating
+        ) {
+            return result.rating;
+        }
+
+        // OMDb found but no rating
+        if (result.found) {
+            return null;
+        }
+
+        // =====================================================
+        // OMDb NOT FOUND
+        // → TMDB
+        // =====================================================
+
+        const tmdbRating =
+            await fetchTMDBRating(
+                title,
+                type,
+                thisRequest
+            );
+
+        if (
+            thisRequest !== requestId
+        ) {
+            return null;
+        }
+
+        if (tmdbRating) {
+            return tmdbRating;
+        }
+
+        return null;
+    }
+
+    // =========================================================
+    // OMDb REQUEST
+    //
+    // Returns:
+    // {
+    //     found: boolean,
+    //     rating: string | null
+    // }
+    // =========================================================
+
+    async function queryOMDb(
+        title,
+        type,
+        thisRequest
+    ) {
         try {
+            const url =
+                'https://www.omdbapi.com/' +
+                '?apikey=' +
+                encodeURIComponent(
+                    OMDB_API_KEY
+                ) +
+                '&t=' +
+                encodeURIComponent(title) +
+                '&type=' +
+                encodeURIComponent(type);
 
             const response =
                 await fetch(url);
 
-            const movie =
+            if (
+                thisRequest !== requestId
+            ) {
+                return {
+                    found: false,
+                    rating: null
+                };
+            }
+
+            if (!response.ok) {
+                log(
+                    '❌ OMDb HTTP error:',
+                    response.status
+                );
+
+                return {
+                    found: false,
+                    rating: null
+                };
+            }
+
+            const data =
                 await response.json();
 
-            /*
-             * Old request?
-             */
+            if (
+                !data ||
+                data.Response !== 'True'
+            ) {
+                log(
+                    '❌ OMDb not found:',
+                    title,
+                    '-',
+                    type
+                );
+
+                return {
+                    found: false,
+                    rating: null
+                };
+            }
+
+            // =================================================
+            // OMDb FOUND
+            // =================================================
+
+            log(
+                '✅ OMDb match:',
+                data.Title,
+                data.Year,
+                data.imdbID
+            );
+
+            // -------------------------------------------------
+            // OMDb has IMDb rating
+            // -------------------------------------------------
+
+            const imdbRating =
+                data.imdbRating;
+
+            if (
+                imdbRating &&
+                imdbRating !== 'N/A'
+            ) {
+                const rating =
+                    Number(imdbRating);
+
+                if (
+                    Number.isFinite(rating)
+                ) {
+                    const formatted =
+                        rating.toFixed(1);
+
+                    log(
+                        '⭐ IMDb:',
+                        formatted
+                    );
+
+                    return {
+                        found: true,
+                        rating: formatted
+                    };
+                }
+            }
+
+            // -------------------------------------------------
+            // OMDb found but NO IMDb rating
+            // → Agregarr using OMDb IMDb ID
+            // -------------------------------------------------
+
+            if (data.imdbID) {
+                log(
+                    '🔄 OMDb found but no rating — trying Agregarr:',
+                    data.imdbID
+                );
+
+                const agregarrRating =
+                    await fetchAgregarrRating(
+                        data.imdbID,
+                        thisRequest
+                    );
+
+                if (
+                    thisRequest !== requestId
+                ) {
+                    return {
+                        found: true,
+                        rating: null
+                    };
+                }
+
+                if (agregarrRating) {
+                    log(
+                        '⭐ Agregarr rating via OMDb:',
+                        agregarrRating
+                    );
+
+                    return {
+                        found: true,
+                        rating: agregarrRating
+                    };
+                }
+            }
+
+            // OMDb definitely found the title,
+            // but neither OMDb nor Agregarr gave a rating.
+            return {
+                found: true,
+                rating: null
+            };
+
+        } catch (error) {
+            if (
+                thisRequest !== requestId
+            ) {
+                return {
+                    found: false,
+                    rating: null
+                };
+            }
+
+            console.error(
+                '❌ OMDb error:',
+                error
+            );
+
+            return {
+                found: false,
+                rating: null
+            };
+        }
+    }
+
+    // =========================================================
+    // TMDB FALLBACK
+    //
+    // ONLY CALLED WHEN OMDb DID NOT FIND THE TITLE
+    // =========================================================
+
+    async function fetchTMDBRating(
+        title,
+        type,
+        thisRequest
+    ) {
+        log(
+            '🔄 OMDb not found — trying TMDB:',
+            title
+        );
+
+        try {
+            // -------------------------------------------------
+            // Choose first TMDB endpoint
+            // -------------------------------------------------
+
+            let endpoint =
+                type === 'series'
+                    ? '/search/tv'
+                    : '/search/movie';
+
+            let actualType =
+                type === 'series'
+                    ? 'tv'
+                    : 'movie';
+
+            let result =
+                await searchTMDB(
+                    title,
+                    endpoint,
+                    thisRequest
+                );
 
             if (
                 thisRequest !== requestId
             ) {
-                return;
+                return null;
+            }
+
+            // -------------------------------------------------
+            // Try alternate type if needed
+            // -------------------------------------------------
+
+            if (!result) {
+                log(
+                    '❌ TMDB not found as:',
+                    type,
+                    '— trying alternate type'
+                );
+
+                endpoint =
+                    type === 'series'
+                        ? '/search/movie'
+                        : '/search/tv';
+
+                actualType =
+                    type === 'series'
+                        ? 'movie'
+                        : 'tv';
+
+                result =
+                    await searchTMDB(
+                        title,
+                        endpoint,
+                        thisRequest
+                    );
             }
 
             if (
-                !movie ||
-                movie.Response !== 'True'
+                thisRequest !== requestId
             ) {
-
-                log(
-                    '❌ OMDb not found:',
-                    metadata.title
-                );
-
-                ratingCache.set(
-                    cacheKey,
-                    {
-                        rating: null
-                    }
-                );
-
-                return;
+                return null;
             }
 
+            if (!result) {
+                log(
+                    '❌ TMDB completely failed:',
+                    title
+                );
+
+                return null;
+            }
+
+            const tmdbId =
+                result.id;
+
             log(
-                '✅ OMDb match:',
-                movie.Title,
-                movie.Year,
-                movie.imdbID
+                '✅ TMDB match:',
+                result.title ||
+                result.name,
+                'TMDB ID:',
+                tmdbId
             );
+
+            // -------------------------------------------------
+            // Get TMDB external IDs
+            // -------------------------------------------------
+
+            const externalUrl =
+                TMDB_API_URL +
+                '/' +
+                actualType +
+                '/' +
+                tmdbId +
+                '/external_ids?api_key=' +
+                encodeURIComponent(
+                    TMDB_API_KEY
+                );
+
+            const externalResponse =
+                await fetch(
+                    externalUrl
+                );
+
+            if (
+                thisRequest !== requestId
+            ) {
+                return null;
+            }
+
+            if (!externalResponse.ok) {
+                log(
+                    '❌ TMDB external IDs HTTP error:',
+                    externalResponse.status
+                );
+
+                return null;
+            }
+
+            const externalData =
+                await externalResponse.json();
 
             const imdbId =
-                movie.imdbID;
-
-            /*
-             * =================================================
-             * OMDb IMDb rating
-             * =================================================
-             */
-
-            const imdbRating =
-                movie.imdbRating &&
-                movie.imdbRating !== 'N/A'
-                    ? movie.imdbRating
-                    : null;
-
-            if (imdbRating) {
-
-                log(
-                    '⭐ IMDb:',
-                    imdbRating
-                );
-
-                ratingCache.set(
-                    cacheKey,
-                    {
-                        rating: imdbRating,
-                        imdbId
-                    }
-                );
-
-                showRating(
-                    imdbRating,
-                    thisRequest
-                );
-
-                return;
-            }
-
-            /*
-             * =================================================
-             * AGREGARR FALLBACK
-             * =================================================
-             */
+                externalData?.imdb_id;
 
             if (!imdbId) {
-
-                ratingCache.set(
-                    cacheKey,
-                    {
-                        rating: null
-                    }
+                log(
+                    '❌ TMDB found title but no IMDb ID:',
+                    title
                 );
 
-                return;
+                return null;
             }
 
             log(
-                '⚠️ OMDb IMDb rating N/A',
-            );
-
-            log(
-                '🔄 Trying Agregarr:',
+                '🎯 TMDB IMDb ID:',
                 imdbId
             );
 
+            // -------------------------------------------------
+            // TMDB → IMDb ID → Agregarr
+            // -------------------------------------------------
+
             const agregarrRating =
-                await getAgregarrRating(
+                await fetchAgregarrRating(
                     imdbId,
                     thisRequest
                 );
@@ -971,74 +1036,58 @@
             if (
                 thisRequest !== requestId
             ) {
-                return;
+                return null;
             }
 
             if (agregarrRating) {
-
                 log(
-                    '⭐ Agregarr IMDb:',
+                    '⭐ Agregarr rating via TMDB:',
                     agregarrRating
                 );
 
-                ratingCache.set(
-                    cacheKey,
-                    {
-                        rating: agregarrRating,
-                        imdbId
-                    }
-                );
-
-                showRating(
-                    agregarrRating,
-                    thisRequest
-                );
-
-                return;
+                return agregarrRating;
             }
 
-            ratingCache.set(
-                cacheKey,
-                {
-                    rating: null,
-                    imdbId
-                }
-            );
+            return null;
 
         } catch (error) {
-
             if (
                 thisRequest !== requestId
             ) {
-                return;
+                return null;
             }
 
             console.error(
-                '❌ OMDb error:',
+                '❌ TMDB fallback error:',
                 error
             );
+
+            return null;
         }
     }
 
     // =========================================================
-    // AGREGARR
+    // TMDB SEARCH
     // =========================================================
 
-    async function getAgregarrRating(
-        imdbId,
+    async function searchTMDB(
+        title,
+        endpoint,
         thisRequest
     ) {
-
         try {
+            const url =
+                TMDB_API_URL +
+                endpoint +
+                '?api_key=' +
+                encodeURIComponent(
+                    TMDB_API_KEY
+                ) +
+                '&query=' +
+                encodeURIComponent(title);
 
             const response =
-                await fetch(
-                    AGREGARR_URL +
-                    encodeURIComponent(imdbId)
-                );
-
-            const data =
-                await response.json();
+                await fetch(url);
 
             if (
                 thisRequest !== requestId
@@ -1046,57 +1095,150 @@
                 return null;
             }
 
-            /*
-             * Handle common Agregarr response shapes.
-             */
+            if (!response.ok) {
+                log(
+                    '❌ TMDB HTTP error:',
+                    response.status
+                );
+
+                return null;
+            }
+
+            const data =
+                await response.json();
+
+            if (
+                !data ||
+                !Array.isArray(data.results) ||
+                !data.results.length
+            ) {
+                return null;
+            }
+
+            return data.results[0];
+
+        } catch (error) {
+            if (
+                thisRequest === requestId
+            ) {
+                console.error(
+                    '❌ TMDB search error:',
+                    error
+                );
+            }
+
+            return null;
+        }
+    }
+
+    // =========================================================
+    // AGREGARR
+    // =========================================================
+
+    async function fetchAgregarrRating(
+        imdbId,
+        thisRequest
+    ) {
+        try {
+            log(
+                '🔎 Agregarr:',
+                imdbId
+            );
+
+            const response =
+                await fetch(
+                    AGREGARR_URL +
+                    encodeURIComponent(imdbId)
+                );
+
+            if (
+                thisRequest !== requestId
+            ) {
+                return null;
+            }
+
+            if (!response.ok) {
+                log(
+                    '❌ Agregarr HTTP error:',
+                    response.status
+                );
+
+                return null;
+            }
+
+            const data =
+                await response.json();
+
+            // -------------------------------------------------
+            // Array response
+            // -------------------------------------------------
 
             if (Array.isArray(data)) {
-
                 for (const item of data) {
-
                     if (
                         item &&
                         item.rating !== undefined &&
                         item.rating !== null
                     ) {
+                        const rating =
+                            Number(item.rating);
 
-                        return Number(
-                            item.rating
-                        ).toFixed(1);
+                        if (
+                            Number.isFinite(rating)
+                        ) {
+                            return rating.toFixed(1);
+                        }
                     }
                 }
             }
+
+            // -------------------------------------------------
+            // { rating: ... }
+            // -------------------------------------------------
 
             if (
                 data &&
                 data.rating !== undefined &&
                 data.rating !== null
             ) {
+                const rating =
+                    Number(data.rating);
 
-                return Number(
-                    data.rating
-                ).toFixed(1);
+                if (
+                    Number.isFinite(rating)
+                ) {
+                    return rating.toFixed(1);
+                }
             }
 
-            /*
-             * Some responses can contain an IMDb object.
-             */
+            // -------------------------------------------------
+            // { imdb: { rating: ... } }
+            // -------------------------------------------------
 
             if (
                 data &&
                 data.imdb &&
-                data.imdb.rating !== undefined
+                data.imdb.rating !== undefined &&
+                data.imdb.rating !== null
             ) {
+                const rating =
+                    Number(data.imdb.rating);
 
-                return Number(
-                    data.imdb.rating
-                ).toFixed(1);
+                if (
+                    Number.isFinite(rating)
+                ) {
+                    return rating.toFixed(1);
+                }
             }
+
+            log(
+                '❌ No usable Agregarr rating:',
+                imdbId
+            );
 
             return null;
 
         } catch (error) {
-
             if (
                 thisRequest !== requestId
             ) {
@@ -1120,12 +1262,7 @@
         rating,
         thisRequest
     ) {
-
-        /*
-         * Never show a result belonging to
-         * an older page.
-         */
-
+        // Never show stale result
         if (
             thisRequest !== requestId
         ) {
@@ -1146,24 +1283,17 @@
         // =====================================================
 
         if (isNetflixTitlePage()) {
-
             const badge =
                 document.createElement('div');
 
-            badge.id = NETFLIX_BADGE_ID;
+            badge.id =
+                NETFLIX_BADGE_ID;
 
             badge.innerHTML = `
                 <span class="streamrate-star">★</span>
                 <span>IMDb</span>
                 <strong>${rating}/10</strong>
             `;
-
-            /*
-             * Netflix's title-treatment area contains the
-             * Play / Add / Like controls. Put the rating
-             * directly in that row, before the final dropdown
-             * control when one exists.
-             */
 
             const controls =
                 document.querySelector(
@@ -1173,58 +1303,87 @@
                     '.buttonControls--container'
                 );
 
-            if (controls) {
-
-                badge.style.display = 'inline-flex';
-                badge.style.alignItems = 'center';
-                badge.style.gap = '7px';
-                badge.style.marginLeft = '10px';
-                badge.style.padding = '8px 12px';
-                badge.style.border =
-                    '1px solid rgba(255,255,255,.35)';
-                badge.style.borderRadius = '4px';
-                badge.style.background =
-                    'rgba(20,20,20,.9)';
-                badge.style.color = '#fff';
-                badge.style.fontSize = '14px';
-                badge.style.lineHeight = '1';
-                badge.style.whiteSpace = 'nowrap';
-                badge.style.fontFamily =
-                    'Arial, sans-serif';
-
-                const star =
-                    badge.querySelector(
-                        '.streamrate-star'
-                    );
-
-                if (star) {
-
-                    star.style.color = '#f5c518';
-                    star.style.fontSize = '16px';
-                }
-
-                const lastChild =
-                    controls.lastElementChild;
-
-                if (lastChild) {
-
-                    controls.insertBefore(
-                        badge,
-                        lastChild
-                    );
-
-                } else {
-
-                    controls.appendChild(badge);
-                }
-
+            if (!controls) {
                 log(
-                    '✅ Netflix IMDb rating displayed:',
-                    rating
+                    '⚠️ Netflix controls not found yet'
                 );
 
                 return;
             }
+
+            badge.style.display =
+                'inline-flex';
+
+            badge.style.alignItems =
+                'center';
+
+            badge.style.gap =
+                '7px';
+
+            badge.style.marginLeft =
+                '10px';
+
+            badge.style.padding =
+                '8px 12px';
+
+            badge.style.border =
+                '1px solid rgba(255,255,255,.35)';
+
+            badge.style.borderRadius =
+                '4px';
+
+            badge.style.background =
+                'rgba(20,20,20,.9)';
+
+            badge.style.color =
+                '#fff';
+
+            badge.style.fontSize =
+                '14px';
+
+            badge.style.lineHeight =
+                '1';
+
+            badge.style.whiteSpace =
+                'nowrap';
+
+            badge.style.fontFamily =
+                'Arial, sans-serif';
+
+            badge.style.cursor =
+                'default';
+
+            const star =
+                badge.querySelector(
+                    '.streamrate-star'
+                );
+
+            if (star) {
+                star.style.color =
+                    '#f5c518';
+
+                star.style.fontSize =
+                    '16px';
+            }
+
+            const lastChild =
+                controls.lastElementChild;
+
+            if (lastChild) {
+                controls.insertBefore(
+                    badge,
+                    lastChild
+                );
+            } else {
+                controls.appendChild(
+                    badge
+                );
+            }
+
+            log(
+                '✅ Netflix IMDb rating displayed:',
+                rating
+            );
 
             return;
         }
@@ -1233,33 +1392,35 @@
         // PRIME VIDEO
         // =====================================================
 
-        const badge =
-            document.createElement('div');
+        if (isPrimeTitlePage()) {
+            const badge =
+                document.createElement('div');
 
-        badge.id = BADGE_ID;
+            badge.id =
+                BADGE_ID;
 
-        badge.innerHTML = `
-            <span class="prime-imdb-star">★</span>
-            <span>IMDb</span>
-            <strong>${rating}/10</strong>
-        `;
+            badge.innerHTML = `
+                <span class="prime-imdb-star">★</span>
+                <span>IMDb</span>
+                <strong>${rating}/10</strong>
+            `;
 
-        const h1 =
-            document.querySelector('h1');
+            const h1 =
+                document.querySelector('h1');
 
-        if (
-            h1 &&
-            h1.parentElement
-        ) {
+            if (
+                h1 &&
+                h1.parentElement
+            ) {
+                h1.parentElement.appendChild(
+                    badge
+                );
 
-            h1.parentElement.appendChild(
-                badge
-            );
-
-            log(
-                '✅ Prime IMDb rating displayed:',
-                rating
-            );
+                log(
+                    '✅ Prime IMDb rating displayed:',
+                    rating
+                );
+            }
         }
     }
 
@@ -1270,7 +1431,6 @@
     function scheduleDetection(
         delay = 200
     ) {
-
         clearTimeout(
             detectionTimer
         );
@@ -1286,11 +1446,12 @@
     // =========================================================
 
     function checkURLChange() {
-
         const url =
             location.href;
 
-        if (url === lastURL) {
+        if (
+            url === lastURL
+        ) {
             return false;
         }
 
@@ -1300,20 +1461,10 @@
             '🔄 Navigation detected'
         );
 
-        /*
-         * New page.
-         */
-
         currentKey = null;
-
         requestId++;
 
         removeRating();
-
-        /*
-         * Try immediately, then observer/retries
-         * will catch the real title.
-         */
 
         scheduleDetection(50);
 
@@ -1329,7 +1480,6 @@
 
     history.pushState =
         function (...args) {
-
             const result =
                 originalPushState.apply(
                     this,
@@ -1346,7 +1496,6 @@
 
     history.replaceState =
         function (...args) {
-
             const result =
                 originalReplaceState.apply(
                     this,
@@ -1361,9 +1510,7 @@
     window.addEventListener(
         'popstate',
         () => {
-
             checkURLChange();
-
             scheduleDetection(50);
         }
     );
@@ -1374,23 +1521,12 @@
 
     const observer =
         new MutationObserver(() => {
-
-            /*
-             * First check navigation.
-             */
-
             checkURLChange();
-
-            /*
-             * Always allow detection while the title
-             * is still being rendered.
-             */
 
             if (
                 isPrimeTitlePage() ||
                 isNetflixTitlePage()
             ) {
-
                 scheduleDetection(150);
             }
         });
@@ -1411,20 +1547,7 @@
         '🚀 StreamRate loaded — Prime Video + Netflix'
     );
 
-    /*
-     * Immediate attempt.
-     */
-
     detectTitle();
-
-    /*
-     * Prime and Netflix can render title/modal
-     * content AFTER content.js has started.
-     *
-     * These retries are ONLY startup retries.
-     * They don't cause repeated API calls because
-     * currentKey + cache prevent that.
-     */
 
     setTimeout(() => {
         detectTitle();
